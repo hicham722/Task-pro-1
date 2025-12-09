@@ -58,10 +58,13 @@ const App: React.FC = () => {
     const savedTasks = localStorage.getItem('taskflow_tasks');
     if (savedTasks) {
       try {
-        return JSON.parse(savedTasks);
+        const parsed = JSON.parse(savedTasks);
+        // Validate that parsed data is actually an array
+        if (Array.isArray(parsed)) {
+            return parsed;
+        }
       } catch (e) {
         console.error("Failed to parse tasks", e);
-        return INITIAL_TASKS;
       }
     }
     return INITIAL_TASKS;
