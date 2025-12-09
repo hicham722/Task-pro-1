@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, LayoutDashboard, List, Search, LogOut } from 'lucide-react';
+import { Plus, LayoutDashboard, List, LogOut } from 'lucide-react';
 import { Task, DashboardStats, User } from './types';
 import StatsCards from './components/StatsCards';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
@@ -7,7 +7,7 @@ import TaskList from './components/TaskList';
 import TaskModal from './components/TaskModal';
 import LoginScreen from './components/LoginScreen';
 
-// Dummy Initial Data
+// Dummy Initial Data (Used only if local storage is empty)
 const INITIAL_TASKS: Task[] = [
   {
     id: '1',
@@ -52,7 +52,21 @@ const INITIAL_TASKS: Task[] = [
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  
+  // Initialize tasks from Local Storage or fallback to INITIAL_TASKS
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    const savedTasks = localStorage.getItem('taskflow_tasks');
+    if (savedTasks) {
+      try {
+        return JSON.parse(savedTasks);
+      } catch (e) {
+        console.error("Failed to parse tasks", e);
+        return INITIAL_TASKS;
+      }
+    }
+    return INITIAL_TASKS;
+  });
+
   const [view, setView] = useState<'list' | 'analytics'>('list');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [filter, setFilter] = useState('all');
@@ -71,31 +85,33 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // Save Tasks to LocalStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('taskflow_tasks', JSON.stringify(tasks));
+  }, [tasks]);
+
   // Check for reminders
   useEffect(() => {
-    if (!user) return; // Don't check reminders if not logged in
+    if (!user) return;
 
     if (!("Notification" in window)) {
-        console.log("This browser does not support desktop notification");
         return;
     }
 
     const checkReminders = () => {
         if (Notification.permission !== "granted") return;
 
-        // "24 hours before" roughly implies tasks due "Tomorrow"
         const today = new Date();
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
         const tomorrowStr = tomorrow.toISOString().split('T')[0];
 
         tasks.forEach(task => {
-            // Check if reminder is on, it's due tomorrow, and we haven't notified yet in this session
             if (task.reminder && task.dueDate === tomorrowStr) {
                 if (!notifiedTasksRef.current.has(task.id)) {
                     new Notification(`Reminder: ${task.title}`, {
                         body: `This task is due tomorrow (${task.dueDate})!`,
-                        icon: 'https://cdn-icons-png.flaticon.com/512/3239/3239952.png' // Generic calendar icon
+                        icon: 'https://cdn-icons-png.flaticon.com/512/3239/3239952.png'
                     });
                     notifiedTasksRef.current.add(task.id);
                 }
@@ -103,7 +119,6 @@ const App: React.FC = () => {
         });
     };
 
-    // Request permission if needed, then check
     if (Notification.permission === 'default') {
         Notification.requestPermission().then(permission => {
             if (permission === 'granted') {

@@ -9,6 +9,21 @@ interface AnalyticsDashboardProps {
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b']; // Blue, Green, Amber
 
 const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ tasks }) => {
+  
+  // Safety check for empty tasks to prevent Recharts crashes or ugly empty states
+  if (!tasks || tasks.length === 0) {
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-center min-h-[300px]">
+                <p className="text-slate-400">No data available for charts.</p>
+            </div>
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-center min-h-[300px]">
+                <p className="text-slate-400">Add tasks to see analytics.</p>
+            </div>
+        </div>
+    );
+  }
+
   // Process data for Donut Chart (Status)
   const statusCounts = {
     Upcoming: 0,
@@ -45,24 +60,28 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ tasks }) => {
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h3 className="text-lg font-semibold text-slate-700 mb-4">Task Status Distribution</h3>
         <div className="h-64 w-full flex items-center justify-center">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={pieData}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={80}
-                paddingAngle={5}
-                dataKey="value"
-              >
-                {pieData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+          {pieData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={5}
+                    dataKey="value"
+                >
+                    {pieData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                </Pie>
+                <Tooltip />
+                </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-slate-400 text-sm">No task status data.</p>
+          )}
         </div>
         <div className="flex justify-center gap-4 mt-2">
             {pieData.map((entry, index) => (
@@ -77,16 +96,20 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ tasks }) => {
       {/* Bar Chart */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h3 className="text-lg font-semibold text-slate-700 mb-4">Tasks by Category</h3>
-        <div className="h-64 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={barData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-              <XAxis dataKey="name" tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <Tooltip cursor={{fill: 'transparent'}} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-              <Bar dataKey="tasks" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={50} />
-            </BarChart>
-          </ResponsiveContainer>
+        <div className="h-64 w-full flex items-center justify-center">
+          {barData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={barData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="name" tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip cursor={{fill: 'transparent'}} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                <Bar dataKey="tasks" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={50} />
+                </BarChart>
+            </ResponsiveContainer>
+          ) : (
+             <p className="text-slate-400 text-sm">No category data.</p>
+          )}
         </div>
       </div>
     </div>
