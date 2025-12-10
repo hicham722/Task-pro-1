@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, LayoutDashboard, List, LogOut } from 'lucide-react';
+import { Plus, LayoutDashboard, List, LogOut, RefreshCw } from 'lucide-react';
 import { Task, DashboardStats, User } from './types';
 import StatsCards from './components/StatsCards';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
@@ -7,76 +7,18 @@ import TaskList from './components/TaskList';
 import TaskModal from './components/TaskModal';
 import LoginScreen from './components/LoginScreen';
 
-// Dummy Initial Data (Used only if local storage is empty)
-const INITIAL_TASKS: Task[] = [
-  {
-    id: '1',
-    title: 'Fatura nu banke',
-    description: 'Pay monthly credit card bill',
-    category: 'Finance',
-    amount: 150.00,
-    dueDate: '2025-11-21',
-    status: 'Overdue',
-    notes: 'Important',
-    reminder: true,
-  },
-  {
-    id: '2',
-    title: 'Project Setup',
-    description: 'Initialize react project',
-    category: 'Work',
-    amount: 0,
-    dueDate: '2025-12-01',
-    status: 'Upcoming',
-    reminder: false,
-  },
-  {
-    id: '3',
-    title: 'Weekly Groceries',
-    category: 'Shopping',
-    amount: 85.50,
-    dueDate: '2025-12-05',
-    status: 'Completed',
-    reminder: false,
-  },
-  {
-    id: '4',
-    title: 'Doctor Appointment',
-    category: 'Health',
-    amount: 50.00,
-    dueDate: '2025-12-10',
-    status: 'Upcoming',
-    reminder: true,
-  }
-];
-
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(false);
   
-  // Initialize tasks from Local Storage or fallback to INITIAL_TASKS
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    const savedTasks = localStorage.getItem('taskflow_tasks');
-    if (savedTasks) {
-      try {
-        const parsed = JSON.parse(savedTasks);
-        // Validate that parsed data is actually an array
-        if (Array.isArray(parsed)) {
-            return parsed;
-        }
-      } catch (e) {
-        console.error("Failed to parse tasks", e);
-      }
-    }
-    return INITIAL_TASKS;
-  });
-
   const [view, setView] = useState<'list' | 'analytics'>('list');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [filter, setFilter] = useState('all');
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const notifiedTasksRef = useRef<Set<string>>(new Set());
 
-  // Load User from LocalStorage
+  // Load User from LocalStorage (Keep auth client-side for now)
   useEffect(() => {
     const savedUser = localStorage.getItem('taskflow_user');
     if (savedUser) {
@@ -88,14 +30,33 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Save Tasks to LocalStorage whenever they change
+  // Fetch Tasks from Backend
+  const fetchTasks = async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    try {
+      const response = await fetch('/api/tasks');
+      if (response.ok) {
+        const data = await response.json();
+        setTasks(data);
+      } else {
+        console.error("Failed to fetch tasks");
+      }
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    localStorage.setItem('taskflow_tasks', JSON.stringify(tasks));
-  }, [tasks]);
+    fetchTasks();
+  }, [user]);
 
   // Check for reminders
   useEffect(() => {
-    if (!user) return;
+    if (!user || tasks.length === 0) return;
 
     if (!("Notification" in window)) {
         return;
@@ -174,25 +135,54 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     setUser(null);
+    setTasks([]);
     localStorage.removeItem('taskflow_user');
   };
 
-  const handleAddTask = (newTask: Omit<Task, 'id'>) => {
-    if (editingTask) {
-        setTasks(tasks.map(t => t.id === editingTask.id ? { ...newTask, id: editingTask.id } : t));
-        setEditingTask(null);
-    } else {
-        const task: Task = {
-            ...newTask,
-            id: Math.random().toString(36).substr(2, 9),
-        };
-        setTasks([...tasks, task]);
+  const handleAddTask = async (newTaskData: Omit<Task, 'id'>) => {
+    try {
+      if (editingTask) {
+        // Update existing task
+        const response = await fetch(`/api/tasks/${editingTask.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newTaskData),
+        });
+        
+        if (response.ok) {
+          const updatedTask = await response.json();
+          setTasks(tasks.map(t => t.id === editingTask.id ? updatedTask : t));
+          setEditingTask(null);
+        }
+      } else {
+        // Create new task
+        const response = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newTaskData),
+        });
+        
+        if (response.ok) {
+          const savedTask = await response.json();
+          setTasks([savedTask, ...tasks]);
+        }
+      }
+    } catch (error) {
+      console.error("Operation failed:", error);
+      alert("Failed to save task. Please ensure the backend server is running.");
     }
   };
 
-  const handleDeleteTask = (id: string) => {
+  const handleDeleteTask = async (id: string) => {
     if (confirm('Are you sure you want to delete this task?')) {
-      setTasks(tasks.filter(t => t.id !== id));
+      try {
+        const response = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+        if (response.ok) {
+          setTasks(tasks.filter(t => t.id !== id));
+        }
+      } catch (error) {
+        console.error("Delete failed:", error);
+      }
     }
   };
 
@@ -224,6 +214,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-4">
+             {loading && <span className="text-xs text-slate-400 flex items-center gap-1"><RefreshCw size={12} className="animate-spin"/> Syncing...</span>}
             {/* View Toggles */}
             <div className="flex bg-slate-100 p-1 rounded-lg hidden md:flex">
               <button
@@ -312,7 +303,12 @@ const App: React.FC = () => {
 
         <StatsCards stats={stats} />
 
-        {view === 'analytics' ? (
+        {loading && tasks.length === 0 ? (
+           <div className="text-center py-20">
+              <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+              <p className="text-slate-500">Loading tasks from server...</p>
+           </div>
+        ) : view === 'analytics' ? (
           <AnalyticsDashboard tasks={tasks} />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
