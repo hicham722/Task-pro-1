@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, LayoutDashboard, List, LogOut, RefreshCw } from 'lucide-react';
+import { Plus, LayoutDashboard, List, LogOut, RefreshCw, WifiOff } from 'lucide-react';
 import { Task, DashboardStats, User } from './types';
 import StatsCards from './components/StatsCards';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
@@ -11,6 +11,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
   
   const [view, setView] = useState<'list' | 'analytics'>('list');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -18,7 +19,7 @@ const App: React.FC = () => {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const notifiedTasksRef = useRef<Set<string>>(new Set());
 
-  // Load User from LocalStorage (Keep auth client-side for now)
+  // Load User from LocalStorage
   useEffect(() => {
     const savedUser = localStorage.getItem('taskflow_user');
     if (savedUser) {
@@ -30,21 +31,35 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Fetch Tasks from Backend
+  // Fetch Tasks (Try Backend -> Fallback to LocalStorage)
   const fetchTasks = async () => {
     if (!user) return;
     
     setLoading(true);
     try {
+      // Try to fetch from API
       const response = await fetch('/api/tasks');
       if (response.ok) {
         const data = await response.json();
         setTasks(data);
+        setIsOffline(false);
+        // Sync successful fetch to local storage for future offline backup
+        localStorage.setItem('taskflow_tasks', JSON.stringify(data));
       } else {
-        console.error("Failed to fetch tasks");
+        throw new Error("Server response not ok");
       }
     } catch (error) {
-      console.error("Error fetching tasks:", error);
+      console.warn("Backend unavailable, switching to offline mode.");
+      setIsOffline(true);
+      // Fallback: Load from LocalStorage
+      const savedTasks = localStorage.getItem('taskflow_tasks');
+      if (savedTasks) {
+        try {
+            setTasks(JSON.parse(savedTasks));
+        } catch (e) {
+            setTasks([]);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -127,7 +142,7 @@ const App: React.FC = () => {
     });
   }, [tasks, filter]);
 
-  // Handlers
+  // Auth Handlers
   const handleLogin = (newUser: User) => {
     setUser(newUser);
     localStorage.setItem('taskflow_user', JSON.stringify(newUser));
@@ -139,50 +154,96 @@ const App: React.FC = () => {
     localStorage.removeItem('taskflow_user');
   };
 
+  // CRUD Handlers
+  const updateLocalState = (newTasks: Task[]) => {
+      setTasks(newTasks);
+      localStorage.setItem('taskflow_tasks', JSON.stringify(newTasks));
+  };
+
   const handleAddTask = async (newTaskData: Omit<Task, 'id'>) => {
+    const tempId = Date.now().toString();
+
+    // 1. Offline Mode handling
+    if (isOffline) {
+        if (editingTask) {
+            const updatedTasks = tasks.map(t => t.id === editingTask.id ? { ...newTaskData, id: editingTask.id } as Task : t);
+            updateLocalState(updatedTasks);
+        } else {
+            const newTask = { ...newTaskData, id: tempId } as Task;
+            updateLocalState([newTask, ...tasks]);
+        }
+        setEditingTask(null);
+        return;
+    }
+
+    // 2. Online Mode handling
     try {
       if (editingTask) {
-        // Update existing task
         const response = await fetch(`/api/tasks/${editingTask.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(newTaskData),
         });
         
-        if (response.ok) {
-          const updatedTask = await response.json();
-          setTasks(tasks.map(t => t.id === editingTask.id ? updatedTask : t));
-          setEditingTask(null);
-        }
+        if (!response.ok) throw new Error("Update failed");
+        
+        const updatedTask = await response.json();
+        const updatedTasks = tasks.map(t => t.id === editingTask.id ? updatedTask : t);
+        setTasks(updatedTasks);
+        // Sync to local backup
+        localStorage.setItem('taskflow_tasks', JSON.stringify(updatedTasks));
       } else {
-        // Create new task
         const response = await fetch('/api/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(newTaskData),
         });
         
-        if (response.ok) {
-          const savedTask = await response.json();
-          setTasks([savedTask, ...tasks]);
-        }
+        if (!response.ok) throw new Error("Create failed");
+
+        const savedTask = await response.json();
+        const updatedTasks = [savedTask, ...tasks];
+        setTasks(updatedTasks);
+        // Sync to local backup
+        localStorage.setItem('taskflow_tasks', JSON.stringify(updatedTasks));
       }
     } catch (error) {
-      console.error("Operation failed:", error);
-      alert("Failed to save task. Please ensure the backend server is running.");
+      console.error("Operation failed, switching to offline:", error);
+      setIsOffline(true);
+      // Fallback logic
+      if (editingTask) {
+          const updatedTasks = tasks.map(t => t.id === editingTask.id ? { ...newTaskData, id: editingTask.id } as Task : t);
+          updateLocalState(updatedTasks);
+      } else {
+          const newTask = { ...newTaskData, id: tempId } as Task;
+          updateLocalState([newTask, ...tasks]);
+      }
+    } finally {
+        setEditingTask(null);
     }
   };
 
   const handleDeleteTask = async (id: string) => {
-    if (confirm('Are you sure you want to delete this task?')) {
-      try {
+    if (!confirm('Are you sure you want to delete this task?')) return;
+
+    if (isOffline) {
+        const updatedTasks = tasks.filter(t => t.id !== id);
+        updateLocalState(updatedTasks);
+        return;
+    }
+
+    try {
         const response = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
-        if (response.ok) {
-          setTasks(tasks.filter(t => t.id !== id));
-        }
-      } catch (error) {
-        console.error("Delete failed:", error);
-      }
+        if (!response.ok) throw new Error("Delete failed");
+        
+        const updatedTasks = tasks.filter(t => t.id !== id);
+        setTasks(updatedTasks);
+        localStorage.setItem('taskflow_tasks', JSON.stringify(updatedTasks));
+    } catch (error) {
+        console.error("Delete failed, switching offline:", error);
+        setIsOffline(true);
+        const updatedTasks = tasks.filter(t => t.id !== id);
+        updateLocalState(updatedTasks);
     }
   };
 
@@ -196,7 +257,6 @@ const App: React.FC = () => {
       setEditingTask(null);
   }
 
-  // Render Login Screen if not authenticated
   if (!user) {
     return <LoginScreen onLogin={handleLogin} />;
   }
@@ -214,7 +274,19 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-4">
-             {loading && <span className="text-xs text-slate-400 flex items-center gap-1"><RefreshCw size={12} className="animate-spin"/> Syncing...</span>}
+            {isOffline && (
+                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 text-xs font-medium rounded-full border border-amber-100">
+                    <WifiOff size={12} />
+                    <span>Offline Mode</span>
+                </div>
+            )}
+            
+            {loading && !isOffline && (
+                <span className="text-xs text-slate-400 flex items-center gap-1">
+                    <RefreshCw size={12} className="animate-spin"/> Syncing...
+                </span>
+            )}
+
             {/* View Toggles */}
             <div className="flex bg-slate-100 p-1 rounded-lg hidden md:flex">
               <button
@@ -247,7 +319,6 @@ const App: React.FC = () => {
               <span className="hidden sm:inline">Add Task</span>
             </button>
             
-            {/* User Profile Dropdown / Logout */}
             <div className="flex items-center gap-3 pl-2">
                <div className="text-right hidden sm:block">
                   <p className="text-sm font-semibold text-slate-700">{user.name}</p>
@@ -269,6 +340,14 @@ const App: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Offline Banner for Mobile */}
+      {isOffline && (
+        <div className="sm:hidden bg-amber-50 text-amber-700 px-4 py-2 text-xs font-medium text-center border-b border-amber-100 flex items-center justify-center gap-2">
+            <WifiOff size={12} />
+            Offline Mode: Changes saved locally
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -303,12 +382,7 @@ const App: React.FC = () => {
 
         <StatsCards stats={stats} />
 
-        {loading && tasks.length === 0 ? (
-           <div className="text-center py-20">
-              <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-              <p className="text-slate-500">Loading tasks from server...</p>
-           </div>
-        ) : view === 'analytics' ? (
+        {view === 'analytics' ? (
           <AnalyticsDashboard tasks={tasks} />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -323,7 +397,6 @@ const App: React.FC = () => {
                 />
              </div>
              <div className="lg:col-span-1 hidden lg:block">
-                 {/* Mini Analytics for List View - showing only the chart for context */}
                  <h3 className="text-xl font-bold text-slate-800 mb-4">Quick Stats</h3>
                  <div className="space-y-6">
                     <AnalyticsDashboard tasks={tasks} />
