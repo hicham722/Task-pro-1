@@ -1,8 +1,10 @@
+
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const Task = require('./models/Task');
+const User = require('./models/User');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -19,10 +21,68 @@ mongoose.connect(MONGO_URI)
 
 // Routes
 
-// Get all tasks
-app.get('/api/tasks', async (req, res) => {
+// --- USER ROUTES ---
+
+// Sync User (Login/Register)
+app.post('/api/users/sync', async (req, res) => {
   try {
-    const tasks = await Task.find().sort({ createdAt: -1 });
+    const { name, email, avatar } = req.body;
+    const user = await User.findOneAndUpdate(
+      { email },
+      { name, email, avatar, lastLogin: new Date() },
+      { upsert: true, new: true }
+    );
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Admin: Get All Users with Stats
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const users = await User.find().sort({ lastLogin: -1 });
+    
+    // Aggregate stats for each user
+    const userStats = await Promise.all(users.map(async (user) => {
+      // Find tasks belonging to this user (assuming tasks store userId or userEmail)
+      // Note: In a real app, ensure Task model stores the correct linking ID.
+      // Here we assume tasks might be linked by userId (which matches user.email for simplicity in this specific migration)
+      // or we update the frontend to send the MongoDB _id.
+      
+      // For this implementation, we will look for tasks where userId matches the user's email 
+      // (since the frontend mockup uses email/local storage logic often).
+      const tasks = await Task.find({ userId: user.email });
+      
+      const completedTasks = tasks.filter(t => t.status === 'Completed').length;
+      const totalSpent = tasks.reduce((sum, t) => sum + (t.amount || 0), 0);
+
+      return {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        lastLogin: user.lastLogin,
+        totalTasks: tasks.length,
+        completedTasks,
+        totalSpent
+      };
+    }));
+
+    res.json(userStats);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// --- TASK ROUTES ---
+
+// Get all tasks (Filtered by User Email in query for security in real app)
+app.get('/api/tasks', async (req, res) => {
+  const { userId } = req.query;
+  try {
+    const query = userId ? { userId } : {};
+    const tasks = await Task.find(query).sort({ createdAt: -1 });
     res.json(tasks);
   } catch (error) {
     res.status(500).json({ message: error.message });

@@ -1,11 +1,13 @@
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, LayoutDashboard, List, LogOut, RefreshCw, WifiOff } from 'lucide-react';
+import { Plus, LayoutDashboard, List, LogOut, RefreshCw, WifiOff, Shield } from 'lucide-react';
 import { Task, DashboardStats, User } from './types';
 import StatsCards from './components/StatsCards';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import TaskList from './components/TaskList';
 import TaskModal from './components/TaskModal';
 import LoginScreen from './components/LoginScreen';
+import AdminDashboard from './components/AdminDashboard';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -13,7 +15,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   
-  const [view, setView] = useState<'list' | 'analytics'>('list');
+  const [view, setView] = useState<'list' | 'analytics' | 'admin'>('list');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [filter, setFilter] = useState('all');
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -24,12 +26,27 @@ const App: React.FC = () => {
     const savedUser = localStorage.getItem('taskflow_user');
     if (savedUser) {
       try {
-        setUser(JSON.parse(savedUser));
+        const parsedUser = JSON.parse(savedUser);
+        setUser(parsedUser);
+        // Sync on reload as well to update lastLogin
+        syncUserToBackend(parsedUser);
       } catch (e) {
         console.error("Failed to parse user data");
       }
     }
   }, []);
+
+  const syncUserToBackend = async (userData: User) => {
+    try {
+        await fetch('/api/users/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(userData)
+        });
+    } catch (e) {
+        console.warn("Could not sync user to backend (Offline?)");
+    }
+  };
 
   // Fetch Tasks (Try Backend -> Fallback to LocalStorage)
   const fetchTasks = async () => {
@@ -37,8 +54,8 @@ const App: React.FC = () => {
     
     setLoading(true);
     try {
-      // Try to fetch from API
-      const response = await fetch('/api/tasks');
+      // Fetch tasks specifically for this user email
+      const response = await fetch(`/api/tasks?userId=${encodeURIComponent(user.email)}`);
       if (response.ok) {
         const data = await response.json();
         setTasks(data);
@@ -146,12 +163,14 @@ const App: React.FC = () => {
   const handleLogin = (newUser: User) => {
     setUser(newUser);
     localStorage.setItem('taskflow_user', JSON.stringify(newUser));
+    syncUserToBackend(newUser);
   };
 
   const handleLogout = () => {
     setUser(null);
     setTasks([]);
     localStorage.removeItem('taskflow_user');
+    setView('list'); // Reset view on logout
   };
 
   // CRUD Handlers
@@ -162,14 +181,15 @@ const App: React.FC = () => {
 
   const handleAddTask = async (newTaskData: Omit<Task, 'id'>) => {
     const tempId = Date.now().toString();
+    const taskWithUser = { ...newTaskData, userId: user?.email };
 
     // 1. Offline Mode handling
     if (isOffline) {
         if (editingTask) {
-            const updatedTasks = tasks.map(t => t.id === editingTask.id ? { ...newTaskData, id: editingTask.id } as Task : t);
+            const updatedTasks = tasks.map(t => t.id === editingTask.id ? { ...taskWithUser, id: editingTask.id } as Task : t);
             updateLocalState(updatedTasks);
         } else {
-            const newTask = { ...newTaskData, id: tempId } as Task;
+            const newTask = { ...taskWithUser, id: tempId } as Task;
             updateLocalState([newTask, ...tasks]);
         }
         setEditingTask(null);
@@ -182,7 +202,7 @@ const App: React.FC = () => {
         const response = await fetch(`/api/tasks/${editingTask.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newTaskData),
+          body: JSON.stringify(taskWithUser),
         });
         
         if (!response.ok) throw new Error("Update failed");
@@ -196,7 +216,7 @@ const App: React.FC = () => {
         const response = await fetch('/api/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newTaskData),
+          body: JSON.stringify(taskWithUser),
         });
         
         if (!response.ok) throw new Error("Create failed");
@@ -212,10 +232,10 @@ const App: React.FC = () => {
       setIsOffline(true);
       // Fallback logic
       if (editingTask) {
-          const updatedTasks = tasks.map(t => t.id === editingTask.id ? { ...newTaskData, id: editingTask.id } as Task : t);
+          const updatedTasks = tasks.map(t => t.id === editingTask.id ? { ...taskWithUser, id: editingTask.id } as Task : t);
           updateLocalState(updatedTasks);
       } else {
-          const newTask = { ...newTaskData, id: tempId } as Task;
+          const newTask = { ...taskWithUser, id: tempId } as Task;
           updateLocalState([newTask, ...tasks]);
       }
     } finally {
@@ -308,12 +328,23 @@ const App: React.FC = () => {
                 <span className="hidden sm:inline">Analytics</span>
               </button>
             </div>
+            
+            {/* Admin Button */}
+            <button
+                onClick={() => setView('admin')}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${view === 'admin' ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                title="Admin Dashboard"
+            >
+                <Shield size={18} />
+                <span className="hidden sm:inline">Admin</span>
+            </button>
 
             <div className="h-6 w-px bg-slate-200 hidden md:block"></div>
 
             <button
               onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm shadow-blue-200"
+              disabled={view === 'admin'}
+              className={`flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm shadow-blue-200 ${view === 'admin' ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <Plus size={18} />
               <span className="hidden sm:inline">Add Task</span>
@@ -352,57 +383,63 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        {/* Welcome Section */}
-        <div className="mb-8">
-            <h2 className="text-2xl font-bold text-slate-800">Hello, {user.name}</h2>
-            <p className="text-slate-500">Manage your tasks and payments efficiently</p>
-        </div>
-
-        {/* Mobile View Toggle */}
-        <div className="md:hidden flex bg-slate-100 p-1 rounded-lg mb-6">
-              <button
-                onClick={() => setView('list')}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all ${
-                  view === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                <List size={16} />
-                <span>Tasks</span>
-              </button>
-              <button
-                onClick={() => setView('analytics')}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all ${
-                  view === 'analytics' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                <LayoutDashboard size={16} />
-                <span>Analytics</span>
-              </button>
-        </div>
-
-        <StatsCards stats={stats} />
-
-        {view === 'analytics' ? (
-          <AnalyticsDashboard tasks={tasks} />
+        {view === 'admin' ? (
+             <AdminDashboard onBack={() => setView('list')} />
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-             <div className="lg:col-span-2">
-                 <h3 className="text-xl font-bold text-slate-800 mb-4">My Tasks</h3>
-                 <TaskList 
-                    tasks={filteredTasks} 
-                    filter={filter} 
-                    setFilter={setFilter} 
-                    onDelete={handleDeleteTask}
-                    onEdit={handleEditTask}
-                />
-             </div>
-             <div className="lg:col-span-1 hidden lg:block">
-                 <h3 className="text-xl font-bold text-slate-800 mb-4">Quick Stats</h3>
-                 <div className="space-y-6">
-                    <AnalyticsDashboard tasks={tasks} />
-                 </div>
-             </div>
-          </div>
+            <>
+                {/* Welcome Section */}
+                <div className="mb-8">
+                    <h2 className="text-2xl font-bold text-slate-800">Hello, {user.name}</h2>
+                    <p className="text-slate-500">Manage your tasks and payments efficiently</p>
+                </div>
+
+                {/* Mobile View Toggle */}
+                <div className="md:hidden flex bg-slate-100 p-1 rounded-lg mb-6">
+                    <button
+                        onClick={() => setView('list')}
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                        view === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                    >
+                        <List size={16} />
+                        <span>Tasks</span>
+                    </button>
+                    <button
+                        onClick={() => setView('analytics')}
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                        view === 'analytics' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                    >
+                        <LayoutDashboard size={16} />
+                        <span>Analytics</span>
+                    </button>
+                </div>
+
+                <StatsCards stats={stats} />
+
+                {view === 'analytics' ? (
+                <AnalyticsDashboard tasks={tasks} />
+                ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-2">
+                        <h3 className="text-xl font-bold text-slate-800 mb-4">My Tasks</h3>
+                        <TaskList 
+                            tasks={filteredTasks} 
+                            filter={filter} 
+                            setFilter={setFilter} 
+                            onDelete={handleDeleteTask}
+                            onEdit={handleEditTask}
+                        />
+                    </div>
+                    <div className="lg:col-span-1 hidden lg:block">
+                        <h3 className="text-xl font-bold text-slate-800 mb-4">Quick Stats</h3>
+                        <div className="space-y-6">
+                            <AnalyticsDashboard tasks={tasks} />
+                        </div>
+                    </div>
+                </div>
+                )}
+            </>
         )}
       </main>
 
